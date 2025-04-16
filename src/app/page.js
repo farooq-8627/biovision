@@ -64,7 +64,7 @@ export default function Home() {
                 id="room-id"
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value)}
-                className="w-full p-3 border rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                className="w-full p-3 border rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-black"
               />
             </div>
             
