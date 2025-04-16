@@ -19,44 +19,109 @@ export const ConnectionState = {
 export const createPeerConnection = (config = {}, onStateChange = null) => {
 	const defaultConfig = {
 		iceServers: [
-			{ urls: "stun:stun.l.google.com:19302" },
-			{ urls: "stun:stun1.l.google.com:19302" },
+			{
+				urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+			},
+			{
+				urls: [
+					"stun:stun2.l.google.com:19302",
+					"stun:stun3.l.google.com:19302",
+				],
+			},
+			{ urls: ["stun:stun4.l.google.com:19302"] },
 			{
 				urls: "turn:numb.viagenie.ca",
 				username: "webrtc@live.com",
 				credential: "muazkh",
 			},
+			{
+				urls: "turn:turn.anyfirewall.com:443?transport=tcp",
+				username: "webrtc",
+				credential: "webrtc",
+			},
 		],
 		iceCandidatePoolSize: 10,
+		bundlePolicy: "max-bundle",
+		rtcpMuxPolicy: "require",
+		iceTransportPolicy: "all",
 	};
 
 	const mergedConfig = { ...defaultConfig, ...config };
 	const peerConnection = new RTCPeerConnection(mergedConfig);
 
-	// Handle connection state changes
+	// Enhanced logging and state management
 	peerConnection.addEventListener("connectionstatechange", () => {
-		console.log("Connection state:", peerConnection.connectionState);
+		const state = peerConnection.connectionState;
+		console.log("Connection state changed:", state);
+
+		if (state === "failed" || state === "disconnected") {
+			console.warn("Connection issues detected. Attempting to recover...");
+			tryReconnect(peerConnection);
+		}
+
 		if (onStateChange) {
-			onStateChange(peerConnection.connectionState);
+			onStateChange(state);
 		}
 	});
 
-	// Handle ICE connection state changes
 	peerConnection.addEventListener("iceconnectionstatechange", () => {
 		console.log("ICE connection state:", peerConnection.iceConnectionState);
+		if (peerConnection.iceConnectionState === "failed") {
+			console.warn("ICE connection failed. Attempting to restart ICE...");
+			peerConnection.restartIce();
+		}
 	});
 
-	// Handle ICE gathering state changes
 	peerConnection.addEventListener("icegatheringstatechange", () => {
 		console.log("ICE gathering state:", peerConnection.iceGatheringState);
 	});
 
-	// Handle ICE candidate errors
 	peerConnection.addEventListener("icecandidateerror", (event) => {
-		console.error("ICE candidate error:", event);
+		console.error("ICE candidate error:", {
+			errorCode: event.errorCode,
+			errorText: event.errorText,
+			hostCandidate: event.hostCandidate,
+			url: event.url,
+		});
 	});
 
+	// Add data channel for connection monitoring
+	const monitorChannel = peerConnection.createDataChannel("monitor", {
+		negotiated: true,
+		id: 0,
+	});
+	monitorChannel.onopen = () => console.log("Monitor channel opened");
+	monitorChannel.onclose = () => console.log("Monitor channel closed");
+	monitorChannel.onerror = (error) =>
+		console.error("Monitor channel error:", error);
+
 	return peerConnection;
+};
+
+/**
+ * Try to recover a failed connection
+ * @param {RTCPeerConnection} peerConnection - The peer connection to recover
+ */
+const tryReconnect = async (peerConnection) => {
+	if (!peerConnection) return;
+
+	try {
+		// Try to restart ICE
+		await peerConnection.restartIce();
+
+		// If there are existing transceivers, try to restart them
+		peerConnection.getTransceivers().forEach((transceiver) => {
+			if (transceiver.sender) {
+				try {
+					transceiver.sender.replaceTrack(transceiver.sender.track);
+				} catch (error) {
+					console.warn("Error restarting transceiver:", error);
+				}
+			}
+		});
+	} catch (error) {
+		console.error("Error during connection recovery:", error);
+	}
 };
 
 /**
@@ -200,19 +265,45 @@ export const reconnectPeerConnection = async (peerConnection, stream) => {
 };
 
 /**
- * Get user media with appropriate constraints
+ * Get user media with enhanced error handling and constraints
  * @param {Object} constraints - The constraints for getUserMedia
  * @returns {Promise<MediaStream>} A promise that resolves to the media stream
  */
 export const getUserMedia = async (constraints = {}) => {
 	const defaultConstraints = {
 		audio: true,
-		video: { facingMode: "user" },
+		video: {
+			facingMode: "user",
+			width: { ideal: 1280 },
+			height: { ideal: 720 },
+			frameRate: { ideal: 30 },
+		},
 	};
 
 	const mergedConstraints = { ...defaultConstraints, ...constraints };
 
-	return await navigator.mediaDevices.getUserMedia(mergedConstraints);
+	try {
+		// First try with ideal constraints
+		return await navigator.mediaDevices.getUserMedia(mergedConstraints);
+	} catch (error) {
+		console.warn(
+			"Failed to get media with ideal constraints, trying fallback:",
+			error
+		);
+
+		// Fallback to basic constraints
+		const fallbackConstraints = {
+			audio: true,
+			video: {
+				facingMode: "user",
+				width: { ideal: 640 },
+				height: { ideal: 480 },
+				frameRate: { ideal: 15 },
+			},
+		};
+
+		return await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+	}
 };
 
 /**
